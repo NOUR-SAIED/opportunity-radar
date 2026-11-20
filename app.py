@@ -5,7 +5,10 @@ from datetime import date, datetime, timedelta
 import streamlit as st
 
 from src import config
-from src.storage import get_store
+from src.auth import render_auth, sign_out
+from src.investigator import investigate
+from src.profile import extract_resume_text, load_profile, save_profile
+from src.storage import get_user_store
 
 st.set_page_config(page_title="Opportunity Radar", page_icon=":material/radar:", layout="wide")
 
@@ -30,6 +33,12 @@ header[data-testid="stHeader"] {background: transparent;}
 .masthead {display:flex; align-items:baseline; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1.4rem;}
 .masthead h1 {font-size:1.75rem; font-weight:650; letter-spacing:-0.025em; margin:0; padding:0; color:var(--ink);}
 .masthead .sub {color:var(--muted); font-size:0.9rem;}
+.welcome {max-width:760px; margin:5rem auto 2rem; padding:2.5rem; border:1px solid var(--line);
+  border-radius:20px; background:linear-gradient(135deg, #FFFFFF 0%, #EAF5F5 100%);
+  box-shadow:0 18px 50px rgba(11,110,121,.08);}
+.welcome .eyebrow {color:var(--accent); font-size:.75rem; font-weight:700; letter-spacing:.12em; margin-bottom:.8rem;}
+.welcome h1 {font-size:clamp(2rem, 5vw, 3.6rem); line-height:1.04; letter-spacing:-.05em; color:var(--ink); margin:0 0 .9rem;}
+.welcome p {color:var(--muted); font-size:1.05rem; line-height:1.6; max-width:58ch; margin:0;}
 
 /* summary strip */
 .summary {display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); background:var(--surface);
@@ -78,6 +87,9 @@ header[data-testid="stHeader"] {background: transparent;}
 .mini a {color:var(--ink); font-weight:550; text-decoration:none;}
 .mini small {display:block; color:var(--muted); font-size:0.8rem; margin-top:0.15rem;}
 .empty {color:var(--muted); font-size:0.92rem; padding:2.2rem 0; text-align:left;}
+.profile-card {padding:1rem; border:1px solid var(--line); border-radius:12px; background:#F8FAFB; margin:.6rem 0 1rem;}
+.profile-card strong {display:block; color:var(--ink); margin-bottom:.2rem;}
+.profile-card span {display:block; color:var(--muted); font-size:.82rem; line-height:1.4;}
 .health {display:flex; justify-content:space-between; font-size:0.85rem; padding:0.2rem 0;}
 .health i {display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:0.5rem; vertical-align:middle;}
 .stButton button {border-radius:8px; font-weight:550;}
@@ -100,16 +112,67 @@ span[data-tag] * {color:var(--accent) !important; fill:var(--accent) !important;
 """, unsafe_allow_html=True)
 
 
-# ---------- access gate ----------
-password = config.get("APP_PASSWORD")
-if password and not st.session_state.get("authed"):
-    st.markdown("<div class='masthead'><h1>Opportunity Radar</h1></div>", unsafe_allow_html=True)
-    if st.text_input("Password", type="password") == password:
-        st.session_state.authed = True
-        st.rerun()
+# ---------- authentication and profile onboarding ----------
+auth_user = render_auth()
+if not auth_user:
+    st.markdown(
+        "<div class='welcome'><div class='eyebrow'>PERSONALIZED OPPORTUNITY INTELLIGENCE</div>"
+        "<h1>Find work that can actually work for you.</h1>"
+        "<p>Sign in to keep your resume, preferences, saved opportunities, and application tracker private.</p></div>",
+        unsafe_allow_html=True,
+    )
     st.stop()
 
-store = get_store()
+if "user_profile" not in st.session_state:
+    st.session_state.user_profile = load_profile(auth_user)
+
+profile = st.session_state.user_profile
+if not profile:
+    st.markdown(
+        "<div class='welcome'><div class='eyebrow'>WELCOME TO OPPORTUNITY RADAR</div>"
+        "<h1>Start with your profile.</h1>"
+        "<p>Upload a resume or add the details you want us to use when ranking opportunities.</p></div>",
+        unsafe_allow_html=True,
+    )
+    with st.form("profile_onboarding"):
+        uploaded = st.file_uploader("Resume (PDF or text)", type=["pdf", "txt"])
+        name = st.text_input("Name")
+        headline = st.text_input("Target headline", placeholder="Junior data engineer, analyst, designer...")
+        nationality = st.text_input("Nationality", placeholder="Tunisian")
+        residence = st.text_input("Current residence", placeholder="Tunis, Tunisia")
+        availability = st.text_input("Availability", placeholder="From January 2027")
+        target_roles = st.text_area("Target roles", placeholder="data engineer, analytics engineer")
+        skills = st.text_area("Skills", placeholder="Python, SQL, Docker")
+        experience = st.text_area("Experience and projects", height=180)
+        submitted = st.form_submit_button("Create my profile", type="primary", width="stretch")
+    if submitted:
+        resume_text = ""
+        if uploaded:
+            try:
+                resume_text = extract_resume_text(uploaded)
+            except Exception as exc:
+                st.error(str(exc))
+                st.stop()
+        profile = {
+            "name": name.strip(),
+            "headline": headline.strip(),
+            "nationality": nationality.strip(),
+            "residence": residence.strip(),
+            "availability": availability.strip(),
+            "target_roles": [x.strip().lower() for x in target_roles.split(",") if x.strip()],
+            "skills": [x.strip().lower() for x in skills.replace("\n", ",").split(",") if x.strip()],
+            "experience": [experience.strip()] if experience.strip() else [],
+            "resume_text": resume_text[:20000],
+            "summary": experience.strip()[:1000],
+        }
+        try:
+            st.session_state.user_profile = save_profile(profile, auth_user)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not save your profile: {exc}")
+    st.stop()
+
+store = get_user_store(auth_user)
 esc = html.escape
 
 
@@ -144,7 +207,7 @@ def run_scan():
     log = io.StringIO()
     try:
         with st.spinner("Scanning all sources. This takes 1 to 3 minutes."), contextlib.redirect_stdout(log):
-            records = run(send_alerts=False)
+            records = run(send_alerts=False, profile=profile)
         new = [r for r in records if r["category"] != "irrelevant" and r.get("status") != "skipped"]
         st.session_state.scan_result = ("success", f"Scan done: {len(new)} new {'opportunity' if len(new) == 1 else 'opportunities'} for you.", log.getvalue())
     except BaseException as e:  # includes sys.exit from the pipeline's safety checks
@@ -168,7 +231,7 @@ def draft_application(opp: dict) -> str:
         "No generic filler, no invented experience. Open with why this exact role/program, "
         "then 2 concrete matching experiences from the profile, then a one-line close. "
         "If the posting is in French, write in French.\n\n"
-        f"PROFILE:\n{config.load_profile()}\n\nOPPORTUNITY:\n{opp['title']} at {opp['organization']}\n"
+        f"PROFILE:\n{profile}\n\nOPPORTUNITY:\n{opp['title']} at {opp['organization']}\n"
         f"{opp.get('description', '')[:2500]}"
     )
     try:
@@ -238,6 +301,27 @@ def card(o: dict, prefix: str, controls: bool = True):
 def detail_panel(o: dict, prefix: str):
     with st.expander("Details, notes and draft"):
         st.write(o.get("description", "")[:1500] or "No description.")
+        ik = f"investigation_{o['id']}"
+        if st.button("Investigate this opportunity", key=f"{prefix}_investigate_{o['id']}"):
+            with st.spinner("Reading the canonical posting and checking the evidence"):
+                st.session_state[ik] = investigate(o, profile)
+        if ik in st.session_state:
+            report = st.session_state[ik]
+            st.markdown(f"**{report.get('verdict', 'Investigation')}** · {report.get('confidence', 'low')} confidence")
+            if report.get("fit_summary"):
+                st.caption(report["fit_summary"])
+            if report.get("evidence"):
+                st.markdown("**Evidence**")
+                for evidence in report["evidence"]:
+                    st.markdown(f"> {esc(evidence)}")
+            if report.get("unknowns"):
+                st.markdown("**Still unknown**")
+                for unknown in report["unknowns"]:
+                    st.markdown(f"- {esc(unknown)}")
+            if report.get("next_steps"):
+                st.markdown("**Next steps**")
+                for step in report["next_steps"]:
+                    st.markdown(f"- {esc(step)}")
         nk = f"{prefix}_notes_{o['id']}"
         st.text_area("Notes", value=o.get("notes", ""), key=nk, on_change=save_notes, args=(o["id"], nk),
                      placeholder="Contact name, referral, what you sent")
@@ -267,6 +351,40 @@ st.markdown(f"<div class='masthead'><h1>Opportunity Radar</h1><div class='sub'>{
 
 # ---------- sidebar ----------
 with st.sidebar:
+    st.markdown(
+        f"<div class='profile-card'><strong>{esc(profile.get('name') or auth_user.email)}</strong>"
+        f"<span>{esc(profile.get('headline') or 'Your personalized opportunity workspace')}</span>"
+        f"<span>{esc(auth_user.email)}</span></div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Edit profile"):
+        with st.form("profile_editor"):
+            edit_name = st.text_input("Name", value=profile.get("name", ""))
+            edit_headline = st.text_input("Headline", value=profile.get("headline", ""))
+            edit_roles = st.text_area("Target roles", value=", ".join(profile.get("target_roles", [])))
+            edit_skills = st.text_area("Skills", value=", ".join(profile.get("skills", [])))
+            edit_experience = st.text_area(
+                "Experience and projects",
+                value="\n\n".join(profile.get("experience", [])),
+                height=140,
+            )
+            if st.form_submit_button("Save profile", type="primary", width="stretch"):
+                updated = {
+                    **profile,
+                    "name": edit_name.strip(),
+                    "headline": edit_headline.strip(),
+                    "target_roles": [x.strip().lower() for x in edit_roles.split(",") if x.strip()],
+                    "skills": [x.strip().lower() for x in edit_skills.replace("\n", ",").split(",") if x.strip()],
+                    "experience": [x.strip() for x in edit_experience.split("\n\n") if x.strip()],
+                }
+                try:
+                    st.session_state.user_profile = save_profile(updated, auth_user)
+                    st.success("Profile saved.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not save your profile: {exc}")
+    if st.button("Sign out", width="stretch"):
+        sign_out()
     c1, c2 = st.columns(2)
     if c1.button("Refresh", width="stretch", help="Reload saved results. Doesn't search for new ones."):
         load.clear()

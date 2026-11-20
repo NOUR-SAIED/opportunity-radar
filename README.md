@@ -1,8 +1,8 @@
 # 🧭 Opportunity Radar
 
-A personal agent that scans remote jobs, relocation roles, early-career programs and
-scholarships every morning, checks whether a **Tunisian candidate can actually get them**,
-and puts the results in a dashboard with an application tracker.
+A personalized opportunity intelligence app that scans remote jobs, relocation roles,
+early-career programs and scholarships, checks whether a candidate can realistically
+get them, and puts the results in a dashboard with an application tracker.
 
 Runs for **$0/month**: GitHub Actions (scheduler), Gemini free tier (classification),
 Supabase free tier (database), Streamlit Community Cloud (dashboard), Telegram (alerts).
@@ -36,9 +36,13 @@ python -m src.pipeline --sample --no-ai
 streamlit run app.py
 ```
 
+The local dashboard opens with the demo account `demo@example.com` and
+password `demo-password`. Create a profile in the onboarding screen; local
+profiles and private tracker state are stored under `data/`.
+
 ## Run it for real
 
-1. **Profile:** edit `profile.json` (skills, target roles, languages). The AI scores everything against it.
+1. **Profile:** create your profile in the dashboard (skills, target roles, resume, and experience). The AI scores opportunities against it.
 2. **Gemini key:** get a free key at https://aistudio.google.com/apikey. Copy `.env.example` to `.env` and fill it in.
    Check AI Studio for which models are on the free tier and set `GEMINI_MODEL` accordingly.
 3. **Test locally:** `python -m src.pipeline --dry-run` fetches real sources and prints results without saving.
@@ -51,22 +55,39 @@ streamlit run app.py
   fit, seniority, paid-only and passed deadlines.
 - **📋 Tracker:** Saved → Applied → Interview → Offer, sorted by deadline, plus a list of everything the
   scan filtered out and why, so you can check it isn't throwing away good stuff.
-- **Draft an application:** per opportunity, written from your real `experience` in `profile.json`.
+- **Draft an application:** per opportunity, written from your saved experience.
+- **Investigate:** for a promising result, fetch the canonical posting and get an
+  evidence-backed fit review with unknowns and concrete next steps.
 - **Source health** (sidebar): how many items each source returned on the last run. ⚠️ means a source
   returned nothing, the kind of silent failure that broke v0.
+
+### Multi-user profile layer
+
+The app supports Supabase email/password authentication and per-user profile
+storage. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` to enable hosted accounts.
+The dashboard uses the public anon key plus the user's short-lived access token;
+the service-role key remains reserved for trusted pipeline jobs.
+
+Run the complete `supabase_schema.sql` file to create profiles and private
+per-user tracker state. Row-level security prevents one signed-in user from
+reading another user's profile or saved application state. PDF resume
+extraction is included through `pypdf`.
 
 **It learns from you.** Every save and skip is fed back to Gemini as examples on the next run, so
 scores drift toward what you actually go for.
 
 ## Put it online
 
-1. **Supabase** (free): create a project, run `supabase_schema.sql` in the SQL editor.
-   Copy the project URL and the **service_role** key (Settings → API). Keep that key secret.
+1. **Supabase** (free): create a project and run `supabase_schema.sql` in the SQL editor.
+   Copy the project URL, **anon** key, and **service_role** key (Settings → API).
+   Keep the service-role key secret.
 2. **GitHub repo secrets** (Settings → Secrets and variables → Actions):
    `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
    Optional variables: `GEMINI_MODEL`, `DASHBOARD_URL`.
-3. **Streamlit Community Cloud:** deploy `app.py` from the repo, and add the same keys plus
-   `APP_PASSWORD` in the app's Secrets. The password matters: the dashboard can edit your data.
+3. **Streamlit Community Cloud:** deploy `app.py` from the repo. Add
+   `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `GEMINI_API_KEY`, plus
+   optionally `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `GEMINI_MODEL` in
+   the app's Secrets. Users create their own accounts and profiles in the app.
 4. **Actions tab → Daily opportunity scan → Run workflow** to test. It then runs every day at 07:00 Tunis time.
 
 ## Commands

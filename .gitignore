@@ -4,5 +4,7 @@ __pycache__/
 .streamlit/secrets.toml
 data/opportunities.json
 data/runs.json
+data/profiles.json
+data/user_state.json
 .venv/
 venv/

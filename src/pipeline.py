@@ -21,8 +21,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
 
 
-def run(sample=False, use_ai=True, dry_run=False, only=None, send_alerts=True):
-    profile = config.load_profile()
+def run(sample=False, use_ai=True, dry_run=False, only=None, send_alerts=True, profile=None):
+    profile = profile or config.load_profile()
     store = get_store()
     if os.environ.get("GITHUB_ACTIONS") and store.name != "Supabase" and not (dry_run or sample):
         # Actions machines are wiped after each run: a local JSON file would forget

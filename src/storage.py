@@ -147,3 +147,121 @@ class SupabaseStore:
                             params={"status": "in.(new,skipped)", "found_at": f"lt.{_cutoff()}"}, timeout=30)
         r.raise_for_status()
         return len(r.json())
+
+
+class UserScopedStore:
+    """Overlay private workflow state on the shared opportunity catalog."""
+
+    name = "Supabase + private profile"
+
+    def __init__(self, catalog, user_id: str, access_token: str | None = None):
+        self.catalog = catalog
+        self.user_id = user_id
+        self.access_token = access_token
+        self.local_path = config.ROOT / "data" / "user_state.json"
+
+    def _local_states(self) -> dict:
+        if not self.local_path.exists():
+            return {}
+        with open(self.local_path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _remote_states(self) -> dict[str, dict]:
+        if not self.access_token or not config.get("SUPABASE_ANON_KEY"):
+            return {}
+        endpoint = config.get("SUPABASE_URL").rstrip("/") + "/rest/v1/user_opportunity_state"
+        r = requests.get(
+            endpoint,
+            headers={"apikey": config.get("SUPABASE_ANON_KEY"), "Authorization": f"Bearer {self.access_token}"},
+            params={"select": "opportunity_id,status,notes", "user_id": f"eq.{self.user_id}"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return {row["opportunity_id"]: row for row in r.json()}
+
+    def _states(self) -> dict:
+        if self.access_token:
+            return self._remote_states()
+        return self._local_states().get(self.user_id, {})
+
+    def all(self) -> list[dict]:
+        states = self._states()
+        rows = []
+        for row in self.catalog.all():
+            state = states.get(row["id"], {})
+            rows.append({**row, "status": state.get("status", "new"), "notes": state.get("notes", "")})
+        return rows
+
+    def update(self, opp_id: str, **fields):
+        current = self._states().get(opp_id, {})
+        payload = {
+            "user_id": self.user_id,
+            "opportunity_id": opp_id,
+            "status": fields.get("status", current.get("status", "new")),
+            "notes": fields.get("notes", current.get("notes", "")),
+        }
+        if self.access_token:
+            endpoint = config.get("SUPABASE_URL").rstrip("/") + "/rest/v1/user_opportunity_state"
+            r = requests.post(
+                endpoint,
+                headers={
+                    "apikey": config.get("SUPABASE_ANON_KEY"),
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                },
+                params={"on_conflict": "user_id,opportunity_id"},
+                json=payload,
+                timeout=30,
+            )
+            r.raise_for_status()
+            return
+        states = self._local_states()
+        user = states.setdefault(self.user_id, {})
+        current = user.setdefault(opp_id, {"status": "new", "notes": ""})
+        current.update({k: v for k, v in fields.items() if k in ("status", "notes")})
+        self.local_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.local_path, "w", encoding="utf-8") as f:
+            json.dump(states, f, ensure_ascii=False, indent=2)
+
+    def runs(self):
+        return self.catalog.runs()
+
+
+def get_user_store(user):
+    """Return a private state overlay for an authenticated Streamlit user."""
+    token = getattr(user, "access_token", None)
+    if token and config.get("SUPABASE_URL") and config.get("SUPABASE_ANON_KEY"):
+        catalog = AuthenticatedCatalogStore(config.get("SUPABASE_URL"), token)
+    else:
+        catalog = get_store()
+    return UserScopedStore(catalog, user.id, token)
+
+
+class AuthenticatedCatalogStore:
+    """Read-only catalog access using the signed-in user's token."""
+
+    name = "Supabase catalog + private profile"
+
+    def __init__(self, url: str, access_token: str, timeout: int = 30):
+        base = url.rstrip("/") + "/rest/v1"
+        self.opportunities = base + "/opportunities"
+        self.runs_endpoint = base + "/runs"
+        self.headers = {
+            "apikey": config.get("SUPABASE_ANON_KEY"),
+            "Authorization": f"Bearer {access_token}",
+        }
+        self.timeout = timeout
+
+    def all(self) -> list[dict]:
+        r = requests.get(self.opportunities, headers=self.headers,
+                         params={"select": "*"}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
+    def runs(self) -> list[dict]:
+        r = requests.get(self.runs_endpoint, headers=self.headers,
+                         params={"select": "stats", "order": "ran_at.desc", "limit": 30},
+                         timeout=self.timeout)
+        r.raise_for_status()
+        return [row["stats"] for row in r.json()]
