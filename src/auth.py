@@ -21,6 +21,16 @@ class AuthError(RuntimeError):
     """Raised when authentication cannot be completed."""
 
 
+def validate_credentials(email: str, password: str) -> None:
+    email = email.strip()
+    if not email or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        raise AuthError("Enter a valid email address.")
+    if len(password) < 8:
+        raise AuthError("Password must contain at least 8 characters.")
+    if password.isnumeric():
+        raise AuthError("Password must contain letters or symbols.")
+
+
 @dataclass(frozen=True)
 class AuthUser:
     id: str
@@ -73,12 +83,32 @@ class SupabaseAuth:
         return _user_from_response(response.json())
 
     def sign_in(self, email: str, password: str) -> AuthUser:
+        validate_credentials(email, password)
         return self._request("POST", "/token?grant_type=password",
                              json={"email": email.strip(), "password": password})
 
     def sign_up(self, email: str, password: str) -> AuthUser:
+        validate_credentials(email, password)
         return self._request("POST", "/signup",
                              json={"email": email.strip(), "password": password})
+
+    def refresh(self, refresh_token: str) -> AuthUser:
+        if not refresh_token:
+            raise AuthError("This session needs to sign in again.")
+        return self._request("POST", "/token?grant_type=refresh_token",
+                             json={"refresh_token": refresh_token})
+
+    def sign_out(self, access_token: str) -> None:
+        if not access_token:
+            return
+        try:
+            requests.post(
+                self.base + "/logout",
+                headers={**self.headers, "Authorization": f"Bearer {access_token}"},
+                timeout=self.timeout,
+            )
+        except requests.RequestException:
+            pass
 
 
 class LocalDemoAuth:
@@ -115,15 +145,55 @@ def render_auth(st_module=None) -> AuthUser | None:
         return st_module.session_state[key]
 
     backend = get_auth()
-    with st_module.form("authentication"):
-        email = st_module.text_input("Email", value=DEMO_EMAIL if isinstance(backend, LocalDemoAuth) else "")
-        password = st_module.text_input(
-            "Password",
-            type="password",
-            help=f"Local demo password: {DEMO_PASSWORD}" if isinstance(backend, LocalDemoAuth) else None,
+    left, right = st_module.columns([1.15, 0.85], gap="large")
+    with left:
+        st_module.markdown(
+        "<div class='auth-page'>"
+        "<div class='auth-story'><div class='auth-mark'>OR</div>"
+        "<div class='auth-kicker'>PERSONAL OPPORTUNITY INTELLIGENCE</div>"
+        "<h1>Make every opportunity feel personal.</h1>"
+        "<p>Import your profile, find relevant roles, and track applications without losing your privacy.</p>"
+        "<div class='auth-feature'><b>01</b><span>Personalized fit</span></div>"
+        "<div class='auth-feature'><b>02</b><span>Private application tracker</span></div>"
+        "<div class='auth-feature'><b>03</b><span>Evidence-backed decisions</span></div>"
+        "</div></div>",
+        unsafe_allow_html=True,
         )
-        sign_up = st_module.checkbox("Create account", disabled=isinstance(backend, LocalDemoAuth))
-        submitted = st_module.form_submit_button("Sign up" if sign_up else "Sign in")
+
+    with right:
+        st_module.markdown("<div class='auth-card'><div class='auth-card-label'>YOUR WORKSPACE</div>", unsafe_allow_html=True)
+        sign_in_tab, sign_up_tab = st_module.tabs(["Sign in", "Create account"])
+        submitted = False
+        sign_up = False
+        email = ""
+        password = ""
+
+        with sign_in_tab:
+            with st_module.form("sign_in"):
+                email = st_module.text_input("Email", value=DEMO_EMAIL if isinstance(backend, LocalDemoAuth) else "", key="login_email")
+                password = st_module.text_input(
+                    "Password",
+                    type="password",
+                    key="login_password",
+                    help=f"Local demo password: {DEMO_PASSWORD}" if isinstance(backend, LocalDemoAuth) else None,
+                )
+                submitted = st_module.form_submit_button("Sign in", type="primary", width="stretch")
+        with sign_up_tab:
+            with st_module.form("sign_up"):
+                if isinstance(backend, LocalDemoAuth):
+                    st_module.caption("Create-account mode requires Supabase configuration.")
+                    st_module.form_submit_button("Create account", disabled=True)
+                else:
+                    signup_email = st_module.text_input("Email", key="signup_email")
+                    signup_password = st_module.text_input("Password", type="password", key="signup_password")
+                    signup_confirm = st_module.text_input("Confirm password", type="password", key="signup_confirm")
+                    sign_up_submitted = st_module.form_submit_button("Create account", type="primary", width="stretch")
+                    if sign_up_submitted:
+                        if signup_password != signup_confirm:
+                            st_module.error("Passwords do not match.")
+                        else:
+                            email, password, sign_up, submitted = signup_email, signup_password, True, True
+        st_module.markdown("</div>", unsafe_allow_html=True)
     if submitted:
         try:
             user = backend.sign_up(email, password) if sign_up else backend.sign_in(email, password)
@@ -141,5 +211,9 @@ def sign_out(st_module=None) -> None:
     """Clear the local Streamlit session; Supabase access tokens are short-lived."""
     if st_module is None:
         import streamlit as st_module
-    st_module.session_state.pop("auth_user", None)
+    user = st_module.session_state.pop("auth_user", None)
+    if user and isinstance(get_auth(), SupabaseAuth):
+        get_auth().sign_out(user.access_token or "")
+    for key in ("user_profile", "resume_review", "scan_result", "triage_pos"):
+        st_module.session_state.pop(key, None)
     st_module.rerun()

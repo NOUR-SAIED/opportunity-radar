@@ -7,7 +7,14 @@ import streamlit as st
 from src import config
 from src.auth import render_auth, sign_out
 from src.investigator import investigate
-from src.profile import extract_profile_from_resume, extract_resume_text, load_profile, save_profile
+from src.profile import (
+    extract_profile_from_resume,
+    extract_resume_text,
+    load_profile,
+    normalize_profile,
+    save_profile,
+    validate_profile,
+)
 from src.storage import get_user_store
 
 st.set_page_config(page_title="Opportunity Radar", page_icon=":material/radar:", layout="wide")
@@ -39,6 +46,21 @@ header[data-testid="stHeader"] {background: transparent;}
 .welcome .eyebrow {color:var(--accent); font-size:.75rem; font-weight:700; letter-spacing:.12em; margin-bottom:.8rem;}
 .welcome h1 {font-size:clamp(2rem, 5vw, 3.6rem); line-height:1.04; letter-spacing:-.05em; color:var(--ink); margin:0 0 .9rem;}
 .welcome p {color:var(--muted); font-size:1.05rem; line-height:1.6; max-width:58ch; margin:0;}
+.auth-page {min-height:calc(100vh - 8rem); display:flex; align-items:center;}
+.auth-story {max-width:620px; padding:2.2rem 1.2rem 2.2rem 0;}
+.auth-story h1 {font-size:clamp(2.2rem, 5vw, 4.2rem); line-height:1.02; letter-spacing:-.055em;
+  margin:.3rem 0 1rem; color:var(--ink);}
+.auth-story p {max-width:520px; color:var(--muted); font-size:1.05rem; line-height:1.65;}
+.auth-card {padding:1.3rem; margin-top:2.2rem; background:rgba(255,255,255,.96);
+  border:1px solid var(--line); border-radius:18px; box-shadow:0 18px 50px rgba(21,24,30,.08);}
+.auth-card-label {color:var(--faint); font-size:.68rem; font-weight:700; letter-spacing:.12em; margin-bottom:.25rem;}
+.auth-kicker {color:var(--accent); font-size:.72rem; font-weight:700; letter-spacing:.12em; margin-bottom:.65rem;}
+.auth-mark {width:44px; height:44px; display:grid; place-items:center; border-radius:12px;
+  background:var(--accent); color:white; font-weight:750; letter-spacing:.08em; margin-bottom:1.2rem;}
+.auth-feature {display:flex; align-items:center; gap:.75rem; margin-top:.75rem; color:var(--ink);}
+.auth-feature b {width:28px; height:28px; display:grid; place-items:center; border-radius:50%;
+  background:var(--accent-soft); color:var(--accent); font-size:.72rem;}
+.auth-feature span {font-size:.86rem;}
 
 /* summary strip */
 .summary {display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); background:var(--surface);
@@ -165,6 +187,12 @@ if not profile:
                 "resume_text": review["resume_text"],
                 "summary": summary.strip(),
             }
+            profile = normalize_profile(profile)
+            profile_errors = validate_profile(profile)
+            if profile_errors:
+                for message in profile_errors:
+                    st.error(message)
+                st.stop()
             try:
                 st.session_state.pop("resume_review", None)
                 st.session_state.user_profile = save_profile(profile, auth_user)
@@ -230,6 +258,12 @@ if not profile:
             "resume_text": resume_text[:20000],
             "summary": experience.strip()[:1000],
         }
+        profile = normalize_profile(profile)
+        profile_errors = validate_profile(profile)
+        if profile_errors:
+            for message in profile_errors:
+                st.error(message)
+            st.stop()
         try:
             st.session_state.user_profile = save_profile(profile, auth_user)
             st.rerun()
@@ -442,6 +476,12 @@ with st.sidebar:
                     "skills": [x.strip().lower() for x in edit_skills.replace("\n", ",").split(",") if x.strip()],
                     "experience": [x.strip() for x in edit_experience.split("\n\n") if x.strip()],
                 }
+                updated = normalize_profile(updated)
+                edit_errors = validate_profile(updated)
+                if edit_errors:
+                    for message in edit_errors:
+                        st.error(message)
+                    st.stop()
                 try:
                     st.session_state.user_profile = save_profile(updated, auth_user)
                     st.success("Profile saved.")

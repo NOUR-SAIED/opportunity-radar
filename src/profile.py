@@ -14,6 +14,65 @@ from .auth import AuthUser
 
 MAX_RESUME_BYTES = 5 * 1024 * 1024
 MAX_RESUME_CHARS = 20000
+MAX_SKILLS = 50
+MAX_TARGET_ROLES = 30
+MAX_EXPERIENCE_ITEMS = 20
+
+
+def normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    """Normalize user-supplied profile values before persistence or matching."""
+    normalized = dict(profile)
+    text_fields = (
+        "name", "headline", "nationality", "residence", "availability",
+        "degree", "summary",
+    )
+    for field in text_fields:
+        normalized[field] = re.sub(r"\s+", " ", str(normalized.get(field, "")).strip())[:1000]
+
+    list_fields = ("target_roles", "skills", "languages", "experience")
+    limits = {
+        "target_roles": MAX_TARGET_ROLES,
+        "skills": MAX_SKILLS,
+        "languages": 20,
+        "experience": MAX_EXPERIENCE_ITEMS,
+    }
+    for field in list_fields:
+        value = normalized.get(field, [])
+        if isinstance(value, str):
+            value = [item.strip() for item in value.replace("\n", ",").split(",") if item.strip()]
+        if not isinstance(value, list):
+            value = []
+        seen = set()
+        clean = []
+        for item in value:
+            item = re.sub(r"\s+", " ", str(item).strip())
+            if not item:
+                continue
+            key = item.casefold()
+            if key not in seen:
+                seen.add(key)
+                clean.append(item)
+        normalized[field] = clean[:limits[field]]
+
+    normalized["target_roles"] = [item.lower() for item in normalized["target_roles"]]
+    normalized["skills"] = [item.lower() for item in normalized["skills"]]
+    normalized["resume_text"] = str(normalized.get("resume_text", ""))[:MAX_RESUME_CHARS]
+    return normalized
+
+
+def validate_profile(profile: dict[str, Any]) -> list[str]:
+    """Return human-readable profile problems; never raise inside a form."""
+    profile = normalize_profile(profile)
+    errors = []
+    if not profile["name"]:
+        errors.append("Add your name.")
+    if not profile["headline"]:
+        errors.append("Add a target headline.")
+    if not profile["skills"]:
+        errors.append("Add at least one skill.")
+    if not profile["target_roles"]:
+        errors.append("Add at least one target role.")
+    return errors
 
 
 def extract_resume_text(source: str | Path | bytes | BinaryIO) -> str:
@@ -115,7 +174,7 @@ class LocalProfileStore:
 
     def save(self, user_id: str, profile: dict[str, Any]) -> dict[str, Any]:
         rows = self._read()
-        rows[user_id] = dict(profile)
+        rows[user_id] = normalize_profile(profile)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
         return rows[user_id]
@@ -154,6 +213,7 @@ class SupabaseProfileStore:
         return profile
 
     def save(self, user_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+        profile = normalize_profile(profile)
         payload = {
             "user_id": user_id,
             "full_name": profile.get("name", ""),
