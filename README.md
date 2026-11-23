@@ -70,8 +70,12 @@ the service-role key remains reserved for trusted pipeline jobs.
 
 Run the complete `supabase_schema.sql` file to create profiles and private
 per-user tracker state. Row-level security prevents one signed-in user from
-reading another user's profile or saved application state. PDF resume
-extraction is included through `pypdf`.
+reading another user's profile or saved application state.
+
+Resume uploads accept PDF or text files up to 5 MB. Text-based PDFs are
+extracted locally with `pypdf`; scanned/image-only PDFs must be re-exported or
+pasted as text. Gemini, when configured, proposes structured profile fields,
+but every extracted field is shown for manual review before it is saved.
 
 **It learns from you.** Every save and skip is fed back to Gemini as examples on the next run, so
 scores drift toward what you actually go for.

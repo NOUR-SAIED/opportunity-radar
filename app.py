@@ -7,7 +7,7 @@ import streamlit as st
 from src import config
 from src.auth import render_auth, sign_out
 from src.investigator import investigate
-from src.profile import extract_resume_text, load_profile, save_profile
+from src.profile import extract_profile_from_resume, extract_resume_text, load_profile, save_profile
 from src.storage import get_user_store
 
 st.set_page_config(page_title="Opportunity Radar", page_icon=":material/radar:", layout="wide")
@@ -134,8 +134,47 @@ if not profile:
         "<p>Upload a resume or add the details you want us to use when ranking opportunities.</p></div>",
         unsafe_allow_html=True,
     )
+    if "resume_review" in st.session_state:
+        review = st.session_state["resume_review"]
+        st.success("Review the extracted details before creating your profile.")
+        with st.form("resume_profile_review"):
+            name = st.text_input("Name", value=review["name"])
+            headline = st.text_input("Target headline", value=review["headline"])
+            nationality = st.text_input("Nationality", value=review["nationality"])
+            residence = st.text_input("Current residence", value=review["residence"])
+            availability = st.text_input("Availability", value=review["availability"])
+            degree = st.text_input("Degree", value=review["degree"])
+            target_roles = st.text_area("Target roles", value=review["target_roles"])
+            skills = st.text_area("Skills", value=review["skills"])
+            languages = st.text_input("Languages", value=", ".join(review["languages"]))
+            experience = st.text_area("Experience and projects", value=review["experience"], height=180)
+            summary = st.text_area("Summary", value=review["summary"], height=100)
+            confirmed = st.form_submit_button("Create my reviewed profile", type="primary", width="stretch")
+        if confirmed:
+            profile = {
+                "name": name.strip(),
+                "headline": headline.strip(),
+                "nationality": nationality.strip(),
+                "residence": residence.strip(),
+                "availability": availability.strip(),
+                "degree": degree.strip(),
+                "languages": [x.strip() for x in languages.split(",") if x.strip()],
+                "target_roles": [x.strip().lower() for x in target_roles.split(",") if x.strip()],
+                "skills": [x.strip().lower() for x in skills.replace("\n", ",").split(",") if x.strip()],
+                "experience": [x.strip() for x in experience.split("\n\n") if x.strip()],
+                "resume_text": review["resume_text"],
+                "summary": summary.strip(),
+            }
+            try:
+                st.session_state.pop("resume_review", None)
+                st.session_state.user_profile = save_profile(profile, auth_user)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not save your profile: {exc}")
+        st.stop()
+
     with st.form("profile_onboarding"):
-        uploaded = st.file_uploader("Resume (PDF or text)", type=["pdf", "txt"])
+        uploaded = st.file_uploader("Resume (PDF or text, maximum 5 MB)", type=["pdf", "txt"])
         name = st.text_input("Name")
         headline = st.text_input("Target headline", placeholder="Junior data engineer, analyst, designer...")
         nationality = st.text_input("Nationality", placeholder="Tunisian")
@@ -153,6 +192,32 @@ if not profile:
             except Exception as exc:
                 st.error(str(exc))
                 st.stop()
+        proposed = extract_profile_from_resume(resume_text) if resume_text else {}
+        if proposed:
+            name = proposed.get("name", name)
+            headline = proposed.get("headline", headline)
+            nationality = proposed.get("nationality", nationality)
+            residence = proposed.get("residence", residence)
+            availability = proposed.get("availability", availability)
+            target_roles = ", ".join(proposed.get("target_roles", [])) if proposed.get("target_roles") else target_roles
+            skills = ", ".join(proposed.get("skills", [])) if proposed.get("skills") else skills
+            experience = "\n\n".join(proposed.get("experience", [])) if proposed.get("experience") else experience
+            st.info("The resume was extracted. Review and edit the suggested fields below before saving.")
+            st.session_state["resume_review"] = {
+                "name": name,
+                "headline": headline,
+                "nationality": nationality,
+                "residence": residence,
+                "availability": availability,
+                "target_roles": target_roles,
+                "skills": skills,
+                "experience": experience,
+                "resume_text": resume_text,
+                "degree": proposed.get("degree", ""),
+                "languages": proposed.get("languages", []),
+                "summary": proposed.get("summary", ""),
+            }
+            st.rerun()
         profile = {
             "name": name.strip(),
             "headline": headline.strip(),

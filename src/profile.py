@@ -1,6 +1,7 @@
 """Profile persistence and resume text extraction."""
 import io
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -9,6 +10,10 @@ import requests
 
 from . import config
 from .auth import AuthUser
+
+
+MAX_RESUME_BYTES = 5 * 1024 * 1024
+MAX_RESUME_CHARS = 20000
 
 
 def extract_resume_text(source: str | Path | bytes | BinaryIO) -> str:
@@ -22,14 +27,76 @@ def extract_resume_text(source: str | Path | bytes | BinaryIO) -> str:
     else:
         data = source.read()
         name = str(getattr(source, "name", "")).lower()
+    if len(data) > MAX_RESUME_BYTES:
+        raise ValueError("Resume is too large. Upload a PDF or text file smaller than 5 MB.")
+    if not data:
+        raise ValueError("The uploaded resume is empty.")
 
     if name.endswith(".pdf") or data[:4] == b"%PDF":
         try:
             from pypdf import PdfReader
         except ImportError as exc:
             raise RuntimeError("PDF resume extraction requires optional dependency: pip install pypdf") from exc
-        return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages).strip()
-    return data.decode("utf-8", errors="replace").strip()
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            if reader.is_encrypted:
+                raise ValueError("The PDF is password-protected. Upload an unlocked copy.")
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("This PDF could not be read. Upload a text-based PDF or paste a .txt resume.") from exc
+    else:
+        text = data.decode("utf-8", errors="replace")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[^\S\n]+", " ", text).strip()
+    if len(text) < 30:
+        raise ValueError("No usable text was found. The resume may be scanned or image-only.")
+    return text[:MAX_RESUME_CHARS]
+
+
+def extract_profile_from_resume(resume_text: str) -> dict[str, Any]:
+    """Use the configured model to propose a structured profile for user review.
+
+    This is extraction only: the user remains responsible for reviewing and
+    correcting every field before it is saved.
+    """
+    key = config.get("GEMINI_API_KEY")
+    if not key:
+        return {}
+    from .classifier import call_gemini
+
+    prompt = f"""Read this resume and return ONLY a JSON object for a user-reviewed profile.
+Use these fields:
+name, headline, nationality, residence, availability, degree, languages,
+target_roles (array), skills (array), experience (array), summary.
+Do not infer sensitive or uncertain facts. Keep all values concise. Use "" or []
+when the resume does not establish a value.
+
+RESUME:
+{resume_text[:MAX_RESUME_CHARS]}"""
+    try:
+        raw = call_gemini(prompt, key)
+        match = re.search(r"\{.*\}", raw, re.S)
+        parsed = json.loads(match.group(0) if match else raw)
+        if not isinstance(parsed, dict):
+            return {}
+        allowed = {
+            "name", "headline", "nationality", "residence", "availability",
+            "degree", "languages", "target_roles", "skills", "experience", "summary",
+        }
+        clean = {key: parsed[key] for key in allowed if key in parsed}
+        for field in ("target_roles", "skills", "languages", "experience"):
+            if field in clean and not isinstance(clean[field], list):
+                clean[field] = [str(clean[field])] if clean[field] else []
+        for field in ("name", "headline", "nationality", "residence", "availability",
+                      "degree", "summary"):
+            if field in clean:
+                clean[field] = str(clean[field])[:1000]
+        return clean
+    except Exception:
+        return {}
 
 
 class LocalProfileStore:
