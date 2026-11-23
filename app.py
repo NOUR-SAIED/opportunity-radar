@@ -21,6 +21,27 @@ st.set_page_config(page_title="Opportunity Radar", page_icon=":material/radar:",
 
 ELIGIBILITY_COLOR = {"green": "#16875A", "yellow": "#B7791F", "orange": "#8A94A6", "red": "#C2413A"}
 
+
+def join_profile_items(value, separator=", "):
+    """Convert Gemini or form list values into display strings safely."""
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    parts = []
+    for item in value if isinstance(value, list) else [value]:
+        if isinstance(item, dict):
+            item = " ".join(
+                str(item[key]).strip()
+                for key in ("title", "company", "role", "description", "details")
+                if item.get(key)
+            )
+        else:
+            item = str(item)
+        if item.strip():
+            parts.append(item.strip())
+    return separator.join(parts)
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap');
@@ -168,7 +189,7 @@ if not profile:
             degree = st.text_input("Degree", value=review["degree"])
             target_roles = st.text_area("Target roles", value=review["target_roles"])
             skills = st.text_area("Skills", value=review["skills"])
-            languages = st.text_input("Languages", value=", ".join(review["languages"]))
+            languages = st.text_input("Languages", value=join_profile_items(review["languages"]))
             experience = st.text_area("Experience and projects", value=review["experience"], height=180)
             summary = st.text_area("Summary", value=review["summary"], height=100)
             confirmed = st.form_submit_button("Create my reviewed profile", type="primary", width="stretch")
@@ -203,6 +224,7 @@ if not profile:
 
     with st.form("profile_onboarding"):
         uploaded = st.file_uploader("Resume (PDF or text, maximum 5 MB)", type=["pdf", "txt"])
+        st.caption("Upload your CV/resume, not a job posting. A text-based PDF or TXT works best; scanned PDFs may need OCR.")
         name = st.text_input("Name")
         headline = st.text_input("Target headline", placeholder="Junior data engineer, analyst, designer...")
         nationality = st.text_input("Nationality", placeholder="Tunisian")
@@ -227,9 +249,9 @@ if not profile:
             nationality = proposed.get("nationality", nationality)
             residence = proposed.get("residence", residence)
             availability = proposed.get("availability", availability)
-            target_roles = ", ".join(proposed.get("target_roles", [])) if proposed.get("target_roles") else target_roles
-            skills = ", ".join(proposed.get("skills", [])) if proposed.get("skills") else skills
-            experience = "\n\n".join(proposed.get("experience", [])) if proposed.get("experience") else experience
+            target_roles = join_profile_items(proposed.get("target_roles")) or target_roles
+            skills = join_profile_items(proposed.get("skills")) or skills
+            experience = join_profile_items(proposed.get("experience"), "\n\n") or experience
             st.info("The resume was extracted. Review and edit the suggested fields below before saving.")
             st.session_state["resume_review"] = {
                 "name": name,
@@ -460,11 +482,11 @@ with st.sidebar:
         with st.form("profile_editor"):
             edit_name = st.text_input("Name", value=profile.get("name", ""))
             edit_headline = st.text_input("Headline", value=profile.get("headline", ""))
-            edit_roles = st.text_area("Target roles", value=", ".join(profile.get("target_roles", [])))
-            edit_skills = st.text_area("Skills", value=", ".join(profile.get("skills", [])))
+            edit_roles = st.text_area("Target roles", value=join_profile_items(profile.get("target_roles")))
+            edit_skills = st.text_area("Skills", value=join_profile_items(profile.get("skills")))
             edit_experience = st.text_area(
                 "Experience and projects",
-                value="\n\n".join(profile.get("experience", [])),
+                value=join_profile_items(profile.get("experience"), "\n\n"),
                 height=140,
             )
             if st.form_submit_button("Save profile", type="primary", width="stretch"):

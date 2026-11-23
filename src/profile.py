@@ -45,7 +45,15 @@ def normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
         seen = set()
         clean = []
         for item in value:
-            item = re.sub(r"\s+", " ", str(item).strip())
+            if isinstance(item, dict):
+                item = " ".join(
+                    str(item[key]).strip()
+                    for key in ("title", "company", "role", "description", "details")
+                    if item.get(key)
+                )
+            else:
+                item = str(item)
+            item = re.sub(r"\s+", " ", item).strip()
             if not item:
                 continue
             key = item.casefold()
@@ -147,8 +155,29 @@ RESUME:
         }
         clean = {key: parsed[key] for key in allowed if key in parsed}
         for field in ("target_roles", "skills", "languages", "experience"):
-            if field in clean and not isinstance(clean[field], list):
-                clean[field] = [str(clean[field])] if clean[field] else []
+            value = clean.get(field, [])
+            if not isinstance(value, list):
+                value = [value] if value else []
+            string_items = []
+            for item in value:
+                if isinstance(item, dict):
+                    item = " ".join(
+                        str(part).strip()
+                        for part in (
+                            item.get("title"),
+                            item.get("company"),
+                            item.get("role"),
+                            item.get("description"),
+                            item.get("details"),
+                        )
+                        if part
+                    )
+                else:
+                    item = str(item)
+                item = re.sub(r"\s+", " ", item).strip()
+                if item:
+                    string_items.append(item)
+            clean[field] = string_items[:MAX_EXPERIENCE_ITEMS if field == "experience" else 50]
         for field in ("name", "headline", "nationality", "residence", "availability",
                       "degree", "summary"):
             if field in clean:

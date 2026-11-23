@@ -39,6 +39,20 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("Add your name.", errors)
         self.assertIn("Add at least one skill.", errors)
 
+    def test_experience_objects_are_normalized_to_text(self):
+        profile = normalize_profile({
+            "name": "Nour",
+            "headline": "Data Engineer",
+            "skills": ["Python"],
+            "target_roles": ["Data Engineer"],
+            "experience": [{
+                "company": "Example",
+                "role": "Data Intern",
+                "description": "Built pipelines",
+            }],
+        })
+        self.assertEqual(profile["experience"], ["Example Data Intern Built pipelines"])
+
 
 if __name__ == "__main__":
     unittest.main()
